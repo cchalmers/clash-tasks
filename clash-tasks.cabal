@@ -21,10 +21,14 @@ source-repository head
 
 library
   exposed-modules:
-    Task.Internal
+    Clash.Task
+    Clash.Task.Internal
   hs-source-dirs:      src
   build-depends:
-    base          >= 4.7 && < 5.0,
+    base,
+    deepseq,
+    exceptions,
+    transformers,
     mtl
 
   ghc-options:         -Wall
