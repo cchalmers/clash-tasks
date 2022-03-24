@@ -25,6 +25,10 @@
 
 module Clash.Task.Internal where
 
+import Debug.Trace
+import Data.IORef
+import System.IO.Unsafe
+
 import           Control.Applicative
 import           Control.DeepSeq
 import           Control.Exception
@@ -273,6 +277,105 @@ runM bws0 p0 = goTake bws0 p0 where
     Give fw p -> pure (fw, p)
     TM m      -> m >>= goGive
 
+runM'' :: Monad m => Jet bw -> Task fw bw m a -> m [(fw, bw)]
+runM'' bws0 p0 = goTake bws0 p0 where
+  goTake bss@ ~(bw :- bws) p = case p of
+    Pure _ -> pure []
+    Take s -> goGive (s bw) >>= \case
+                ~(fw, p) -> ((fw, bw) :) <$> goTake bws p
+    M m -> m >>= goTake bss
+  goGive p = case p of
+    Give fw p -> pure (fw, p)
+    TM m      -> m >>= goGive
+
+runM_ :: Monad m => Jet bw -> Task fw bw m a -> m [fw]
+runM_ bws0 p0 = goTake bws0 p0 where
+  goTake bss@ ~(bw :- bws) p = case p of
+    Pure _ -> pure []
+    Take s -> let Give fw p = s bw in (fw:) <$> goTake bws p
+                -- ~(fw, p) -> (fw :) <$> goTake bws p
+    M m -> m >>= goTake bss
+
+l2j ~(a:as) = a :- l2j as
+
+runM' :: MonadIO m => (Jet fw -> Jet bw) -> Task fw bw m a -> m ()
+runM' f t = do
+
+  fwsRef <- liftIO $ newIORef (error "fws not set")
+  let bws = f (l2j $ unsafePerformIO (readIORef fwsRef))
+  fws <- runM bws t
+  liftIO $ writeIORef fwsRef fws
+
+-- runM_SLOW :: MonadIO m => (Jet fw -> Jet bw) -> Task fw bw m a -> m ()
+-- runM_SLOW f t0 = do
+--   fwsRef <- liftIO $ newIORef []
+--   let fws = let a = unsafePerformIO (readIORef fwsRef) in a : (a `seq` fws)
+
+--   let goTake bss@ (bw :- bws) p = case p of
+--         Pure _ -> pure ()
+--         Take s -> goGive (s bw) >>= \case
+--                     ~(fw, p) -> liftIO (writeIORef fwsRef fw) >> goTake bws p
+--         M m -> m >>= goTake bss
+--       goGive p = case p of
+--         Give fw p -> pure (fw, p)
+--         TM m      -> m >>= goGive
+
+--   goTake (f $ l2j fws) t0
+
+lazyIOList :: IO a -> IO [a]
+lazyIOList iow = go
+  where
+    go = do
+      -- putStrLn "doing a step of go"
+      unsafeInterleaveIO iow >>= \x -> do
+        xs <- unsafeInterleaveIO go
+        pure (x:xs)
+
+-- THIS DOES NOT WORK WHEN FW DEPENDS ON BW AT THE SAME CYCLE
+runM_DIRTY :: (Show fw , MonadIO m) => (Jet fw -> Jet bw) -> Task fw bw m a -> m ()
+runM_DIRTY f t0 = do
+  fwsRef <- liftIO $ newIORef (error "fws not set")
+  fws <- liftIO $ lazyIOList (readIORef fwsRef)
+  -- let fws = let a = unsafePerformIO (readIORef fwsRef) in a : fws
+
+  let goTake bss@ (bw :- bws) p = case p of
+        Pure _ -> pure ()
+        Take s -> let (Give fw p) = s bw in liftIO (writeIORef fwsRef fw) >> goTake bws p
+        -- Take s -> goGive (s bw) >>= \case
+        --             ~(fw, p) -> liftIO (writeIORef fwsRef fw) >> goTake bws p
+        M m -> m >>= goTake bss
+      -- goGive p = case p of
+      --   Give fw p -> pure (fw, p)
+      --   TM m      -> m >>= goGive
+
+  goTake (inSequence . f . inSequence $ l2j fws) t0
+  liftIO $ print (take 10 fws)
+
+-- THIS DOES NOT WORK WHEN FW DEPENDS ON BW AT THE SAME CYCLE
+runM_SUPER_DIRTY :: (Show fw , MonadIO m) => (Jet fw -> Jet bw) -> Task fw bw m a -> m ()
+runM_SUPER_DIRTY f t0 = do
+  fwsRef <- liftIO $ newIORef []
+  fws <- liftIO $ lazyIOList $ do
+    ~(fw:fws) <- readIORef fwsRef
+    writeIORef fwsRef fws
+    pure fw
+  -- let fws = let a = unsafePerformIO (readIORef fwsRef) in a : fws
+
+  let goTake bss@ (bw :- bws) p = case p of
+        Pure _ -> pure ()
+        Take s -> let (Give fw p) = s bw in liftIO (modifyIORef fwsRef (++ [fw])) >> goTake bws p
+        -- Take s -> goGive (s bw) >>= \case
+        --             ~(fw, p) -> liftIO (writeIORef fwsRef fw) >> goTake bws p
+        M m -> m >>= goTake bss
+      -- goGive p = case p of
+      --   Give fw p -> pure (fw, p)
+      --   TM m      -> m >>= goGive
+
+  goTake (inSequence . f . inSequence $ l2j fws) t0
+  -- liftIO $ print (take 10 fws)
+
+inSequence (a :- as) = a :- (a `seq` as)
+
 runUncons :: Monad m => (bws -> (bw, bws)) -> bws -> Task fw bw m a -> m [fw]
 runUncons uncons = goTake where
   goTake bws = \case
@@ -298,6 +401,131 @@ runLockstep uncons = goTake where
   goGive = \case
     Give fw t -> (fw, t)
     TM (Identity t) -> goGive t
+
+-- runJet :: Monad m => (bws -> (fw -> bw, bws)) -> bws -> Task fw bw m a -> m ()
+-- runJet uncons = goTake where
+--   goTake bws = \case
+--     Pure _ -> pure []
+--     Take s -> let (bw, bws') = uncons bws
+--               in  goGive (s bw) >>= \case
+--                     ~(fw, t) -> (fw :) <$> goTake bws' t
+--     M m -> m >>= goTake bws
+--   goGive = \case
+--     Give fw t -> pure (fw, t)
+--     TM m      -> m >>= goGive
+
+
+-- runFoldableM :: (Foldable f, Monad m) => f bw -> Task fw bw m a -> m [fw]
+-- runFoldableM bws0 p0 = foldr f ([], p0) bws0 where
+--   f bw (fws, t) = case t of
+--     Pure _ -> pure []
+--     Take s -> goGive (s bw) >>= \case
+--                 ~(fw, p) -> (fw :) <$> goTake bws p
+--     M m -> m >>= goTake bss
+--   goGive p = case p of
+--     Give fw p -> pure (fw, p)
+--     TM m      -> m >>= goGive
+
+-- goTake bws0 p0 where
+--   goTake bss@ ~(bw :- bws) p = case p of
+--     Pure _ -> pure []
+--     Take s -> goGive (s bw) >>= \case
+--                 ~(fw, p) -> (fw :) <$> goTake bws p
+--     M m -> m >>= goTake bss
+--   goGive p = case p of
+--     Give fw p -> pure (fw, p)
+--     TM m      -> m >>= goGive
+
+runList :: Jet bw -> Task fw bw Identity a -> [fw]
+runList bws0 p0 = goTake bws0 p0 where
+  goTake ~(bw :- bws) p = case p of
+    ~(Take s) -> goGive (s bw) >>= \case
+                ~(fw, p) -> fw : goTake bws p
+  goGive p = case p of
+    ~(Give fw p) -> pure (fw, p)
+
+
+makeTask :: (Jet bw -> Jet fw) -> Task fw bw m ()
+makeTask f =
+  let makeAllBws ~(bw :- bws) = \case
+         ~(Take s) -> bw :- case s bw of ~(Give _ p) -> makeAllBws bws p
+      allBws = makeAllBws allBws task
+      fws = f allBws
+      makeTask ~(fw :- fws) = Take $ \_ -> Give fw (makeTask fws)
+      task = makeTask fws
+  in task
+
+main :: IO ()
+main = do
+  putStrLn []
+
+{-
+  let myTask = do
+        wait 11 2
+        -- nextWithBw (+1)
+        bw <- next 99
+        liftIO $ putStrLn $ "bw = " <> show bw
+        put bw
+        liftIO $ putStrLn "got here 2"
+        bw <- next 32
+        liftIO $ putStrLn "got here 3"
+        n <- get
+        liftIO $ putStrLn "got here 4"
+        liftIO $ unsafeInterleaveIO (putStrLn $ "n=" <> show n)
+        traceM ("n=" <> show n)
+        nextWithBw (\_ -> bw+n)
+        liftIO $ putStrLn "hi"
+        -- nextWithBw id
+
+  evalStateT (runM_DIRTY id myTask) (0 :: Int)
+-}
+
+  let myTaskSameCycle = do
+        wait 3 2
+        nextWithBw (+1) >>= liftIO . print
+        nextWithBw (+1) >>= liftIO . print
+        nextWithBw (+1) >>= liftIO . print
+        nextWithBw (+1) >>= liftIO . print
+        x <- nextWithBw (+1)
+        -- liftIO $ print a4
+        wait 3 1
+        liftIO $ putStrLn "hi"
+        -- liftIO $ print [a1, a2, a3, a4, x]
+        -- nextWithBw id
+
+  -- let reg xs = 
+
+  evalStateT (runM_SUPER_DIRTY (0:-) myTaskSameCycle) (0 :: Int)
+
+
+  liftIO $ putStrLn "it worked?!"
+
+  -- output <- newIORef (error "fw not set")
+  -- let -- f as = 100 :- (200 :- as)
+  --     -- myTask = makeTask f
+  --     -- myTask = do
+  --     --   wait 10 2
+  --     --   -- nextWithBw (+1)
+  --     --   bw <- next 99
+  --     --   liftIO $ putStrLn "hi"
+  --     --   put bw
+  --     --   bw <- next 32
+  --     --   n <- get
+  --     --   nextWithBw (\_ -> bw+n)
+  --       -- nextWithBw id
+  --     go i = i :- go (i + 1)
+  --     go' [] = go 0
+  --     go' (a:as) = a :- go' as
+  --     input = go 1
+  --     input' = go' (unsafePerformIO $ unsafeInterleaveIO $ readIORef output)
+  -- outputs <- take 10 <$> evalStateT (runM input' myTask) (0 :: Int)
+  -- writeIORef output outputs
+  -- print outputs
+
+-- Take (\bw -> Give f (bw :- error "hmm"))
+
+-- makeTask :: ([bw] -> [fw]) -> Task fw bw m ()
+-- makeTask f =
 
 next :: fw -> Task fw bw m bw
 next fw = Take $ \bw -> Give fw (Pure bw)
