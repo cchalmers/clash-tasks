@@ -40,10 +40,11 @@ import           Control.Monad.Trans.Class (MonadTrans (lift))
 import           Control.Monad.Writer      (MonadWriter (..), censor)
 import qualified Data.Foldable             as F
 import           Data.Functor
+import           Data.IORef
 import           Data.List                 hiding (foldr)
 import qualified Data.List                 as L
 import           Data.Maybe
-
+import           System.IO.Unsafe
 
 -- | A task is a way of declaring how to interact with a signal. Tasks are
 -- suitable to use with clash 'Signal's because they are lazy enough to handle
@@ -184,8 +185,8 @@ instance MonadError e m => MonadError e (Task bw fw m) where
               M m    -> (TM $ tryRecover <$> m)
 
 instance MonadThrow m => MonadThrow (Task bw fw m) where
-    throwM = lift . throwM
-    {-# INLINE throwM #-}
+  throwM = lift . throwM
+  {-# INLINE throwM #-}
 
 instance MonadCatch m => MonadCatch (Task bw fw m) where
   catch p0 f = go p0 where
@@ -296,8 +297,45 @@ runLockstep uncons = goTake where
               in  (bw, fw) : goTake bws' t
     -- M (Identity t) -> goTake bws t
   goGive = \case
-    Give fw t -> (fw, t)
+    Give fw t       -> (fw, t)
     TM (Identity t) -> goGive t
+
+class Monad m => Interleave m where
+  unsafeInterleaveM :: m a -> m a
+
+instance Interleave IO where
+  unsafeInterleaveM = unsafeInterleaveIO
+
+instance Interleave m => Interleave (StateT s m) where
+  unsafeInterleaveM = mapStateT unsafeInterleaveM
+
+l2j ~(a:as) = a :- l2j as
+
+runM' :: MonadIO m => (Jet fw -> Jet bw) -> Task fw bw m a -> m ()
+runM' f t = do
+  fwsRef <- liftIO $ newIORef (error "fws not set")
+  let bws = f (l2j $ unsafePerformIO (readIORef fwsRef))
+  fws <- runM bws t
+  liftIO $ writeIORef fwsRef fws
+
+execInterleave :: (Interleave m, MonadIO m) => Jet bw -> Task fw bw m a -> m [fw]
+execInterleave bws0 p0 = goTake bws0 p0 where
+  goTake bss@ ~(bw :- bws) p = case p of
+    Pure _ -> pure []
+    Take s -> goGive (s bw) >>= \case
+                ~(fw, p) -> (fw :) <$> unsafeInterleaveM (goTake bws p)
+    M m -> m >>= goTake bss
+  goGive p = case p of
+    Give fw p -> pure (fw, p)
+    TM m      -> m >>= unsafeInterleaveM . goGive
+
+runInterleave :: (Interleave m, MonadIO m) => (Jet fw -> Jet bw) -> Task fw bw m a -> m ()
+runInterleave f t = do
+  bwsRef <- liftIO $ newIORef (error "bws not set")
+  fws <- execInterleave (unsafePerformIO (readIORef bwsRef)) t
+  let bws = f (l2j fws)
+  liftIO $ writeIORef bwsRef bws
+  length fws `seq` pure ()
 
 next :: fw -> Task fw bw m bw
 next fw = Take $ \bw -> Give fw (Pure bw)
