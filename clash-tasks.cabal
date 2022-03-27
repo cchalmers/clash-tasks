@@ -22,13 +22,16 @@ source-repository head
 library
   exposed-modules:
     Clash.Task
+    Clash.Privy.Internal
     Clash.Task.Internal
   hs-source-dirs:      src
   build-depends:
     base,
+    clash-prelude,
     deepseq,
     exceptions,
     transformers,
+    unordered-containers,
     mtl
 
   ghc-options:         -Wall
