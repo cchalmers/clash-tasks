@@ -25,6 +25,7 @@
 
 module Clash.Task.Internal where
 
+
 import           Control.Applicative
 import           Control.DeepSeq
 import           Control.Exception
@@ -33,17 +34,21 @@ import           Control.Monad.Except      (MonadError (..))
 import qualified Control.Monad.Fail        as F (MonadFail (fail))
 import           Control.Monad.IO.Class    (MonadIO (liftIO))
 import           Control.Monad.Identity
-import           Control.Monad.Reader      (MonadReader (..))
+import           Control.Monad.Morph       (hoist)
+import           Control.Monad.Reader      (MonadReader (..), ReaderT,
+                                            mapReaderT)
 import           Control.Monad.State
 import           Control.Monad.State       (MonadState (..))
 import           Control.Monad.Trans.Class (MonadTrans (lift))
-import           Control.Monad.Writer      (MonadWriter (..), censor)
+import           Control.Monad.Writer      (MonadWriter (..), WriterT, censor,
+                                            mapWriterT)
 import qualified Data.Foldable             as F
 import           Data.Functor
 import           Data.IORef
 import           Data.List                 hiding (foldr)
 import qualified Data.List                 as L
 import           Data.Maybe
+import           Hedgehog                  (GenT)
 import           System.IO.Unsafe
 
 -- | A task is a way of declaring how to interact with a signal. Tasks are
@@ -308,6 +313,15 @@ instance Interleave IO where
 
 instance Interleave m => Interleave (StateT s m) where
   unsafeInterleaveM = mapStateT unsafeInterleaveM
+
+instance (Interleave m, Monoid w) => Interleave (WriterT w m) where
+  unsafeInterleaveM = mapWriterT unsafeInterleaveM
+
+instance (Interleave m) => Interleave (ReaderT r m) where
+  unsafeInterleaveM = mapReaderT unsafeInterleaveM
+
+instance (Interleave m) => Interleave (GenT m) where
+  unsafeInterleaveM = hoist unsafeInterleaveM
 
 l2j ~(a:as) = a :- l2j as
 

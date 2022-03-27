@@ -30,9 +30,12 @@ library
     clash-prelude,
     deepseq,
     exceptions,
+    hedgehog,
+    lens,
+    mmorph,
+    mtl,
     transformers,
-    unordered-containers,
-    mtl
+    unordered-containers
 
   ghc-options:         -Wall
 
