@@ -51,6 +51,8 @@ import           Data.Maybe
 import           Hedgehog                  (GenT)
 import           System.IO.Unsafe
 
+import Clash.Signal.Internal
+
 -- | A task is a way of declaring how to interact with a signal. Tasks are
 -- suitable to use with clash 'Signal's because they are lazy enough to handle
 -- same cycle communication.
@@ -263,12 +265,10 @@ combineWith fwF bwF = go where
 --   -> Task sFw sBw ()
 -- combineWithIso i = withIso i (\v c -> combineWith (\a b -> c (a,b)) v)
 
-data Jet a = a :- Jet a
-
-run :: Jet bw -> Task fw bw Identity a -> [fw]
+run :: Signal dom bw -> Task fw bw Identity a -> [fw]
 run j = runIdentity . runM j
 
-runM :: Monad m => Jet bw -> Task fw bw m a -> m [fw]
+runM :: Monad m => Signal dom bw -> Task fw bw m a -> m [fw]
 runM bws0 p0 = goTake bws0 p0 where
   goTake bss@ ~(bw :- bws) p = case p of
     Pure _ -> pure []
@@ -325,14 +325,14 @@ instance (Interleave m) => Interleave (GenT m) where
 
 l2j ~(a:as) = a :- l2j as
 
-runM' :: MonadIO m => (Jet fw -> Jet bw) -> Task fw bw m a -> m ()
+runM' :: MonadIO m => (Signal dom fw -> Signal dom bw) -> Task fw bw m a -> m ()
 runM' f t = do
   fwsRef <- liftIO $ newIORef (error "fws not set")
   let bws = f (l2j $ unsafePerformIO (readIORef fwsRef))
   fws <- runM bws t
   liftIO $ writeIORef fwsRef fws
 
-execInterleave :: (Interleave m, MonadIO m) => Jet bw -> Task fw bw m a -> m ([fw], a)
+execInterleave :: (Interleave m, MonadIO m) => Signal dom bw -> Task fw bw m a -> m ([fw], a)
 execInterleave bws0 p0 = goTake bws0 p0 where
   goTake bss@ ~(bw :- bws) p = case p of
     Pure a -> pure ([], a)
@@ -343,7 +343,7 @@ execInterleave bws0 p0 = goTake bws0 p0 where
     Give fw p -> pure (fw, p)
     TM m      -> m >>= unsafeInterleaveM . goGive
 
-runInterleave :: (Interleave m, MonadIO m) => (Jet fw -> Jet bw) -> Task fw bw m a -> m a
+runInterleave :: (Interleave m, MonadIO m) => (Signal dom fw -> Signal dom bw) -> Task fw bw m a -> m a
 runInterleave f t = do
   bwsRef <- liftIO $ newIORef (error "bws not set")
   (fws, a) <- execInterleave (unsafePerformIO (readIORef bwsRef)) t
