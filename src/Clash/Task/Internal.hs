@@ -385,12 +385,13 @@ forever fw = go where
 
 -- | Await on a backward value and produce a fw for that cycle, given a default value to use while
 -- returning Nothing.
-awaitMaybe :: fw -> (bw -> Maybe fw) -> Task fw bw m ()
+awaitMaybe :: fw -> (bw -> Maybe fw) -> Task fw bw m bw
 awaitMaybe fwDefault f = go where
   go = Take $ \bw ->
-    case f bw of
-      Just fw -> Give fw (Pure ())
-      Nothing -> Give fwDefault go
+    let ~(fw', t) = case f bw of
+          Just fw -> (fw, Pure bw)
+          Nothing -> (fwDefault, go)
+    in Give fw' t
 
 -- | Await on a backward value and produce a fw for that cycle. If you throw an MonadError during
 -- the @m fw@, then the forward value will be an error.
