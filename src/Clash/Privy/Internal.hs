@@ -7,7 +7,6 @@ module Clash.Privy.Internal where
 import Control.Exception
 import System.IO.Unsafe
 import           Data.Typeable
-import           Data.Dynamic
 import Control.Lens
 import Data.Semigroup
 import Data.IORef
@@ -61,7 +60,13 @@ mapPV2 f (PrivyBox p1) (PrivyBox p2) = PrivyBox $ unsafePerformIO $ do
   throw $! f pv1 pv2
 
 instance Semigroup Privy where
-  (<>) = mapPV2 (\(PVs as) (PVs bs) -> PVs $ HM.unionWith (\(PV a) (PV b) -> case cast b of Just b' -> PV (a <> b')) as bs)
+  (<>) = mapPV2 $ \(PVs as) (PVs bs) ->
+          PVs $ HM.unionWith (\(PV a) (PV b) ->
+                case cast b of
+                  Just b' -> PV (a <> b')
+                  Nothing -> error $ "internal Privy error: a :: " <> show (typeOf a)
+                              <> " != b :: " <> show (typeOf b)
+                ) as bs
 
 instance Monoid Privy where
   mempty = purePrivy (PVs mempty)
