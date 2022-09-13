@@ -333,7 +333,7 @@ runM' f t = do
   fws <- runM bws t
   liftIO $ writeIORef fwsRef fws
 
-execInterleave :: (Interleave m, MonadIO m) => Signal dom bw -> Task fw bw m a -> m ([fw], a)
+execInterleave :: (Interleave m, Monad m) => Signal dom bw -> Task fw bw m a -> m ([fw], a)
 execInterleave bws0 p0 = goTake bws0 p0 where
   goTake bss p = case p of
     Pure a -> pure ([], a)
@@ -345,13 +345,12 @@ execInterleave bws0 p0 = goTake bws0 p0 where
     Give fw p -> pure (fw, p)
     TM m      -> m >>= unsafeInterleaveM . goGive
 
-runInterleave :: (Interleave m, MonadIO m) => (Signal dom fw -> Signal dom bw) -> Task fw bw m a -> m a
+runInterleave :: (Interleave m, Monad m) => (Signal dom fw -> Signal dom bw) -> Task fw bw m a -> m a
 runInterleave f t = do
-  bwsRef <- liftIO $ newIORef (error "bws not set")
+  bwsRef <- pure $! unsafePerformIO $ newIORef (error "bws not set")
   (fws, a) <- execInterleave (unsafePerformIO (readIORef bwsRef)) t
   let bws = f (l2j fws)
-  liftIO $ writeIORef bwsRef bws
-  length fws `seq` pure a
+  unsafePerformIO (writeIORef bwsRef bws) `seq` length fws `seq` pure a
 
 next :: fw -> Task fw bw m bw
 next fw = Take $ \bw -> Give fw (Pure bw)
