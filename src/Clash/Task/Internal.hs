@@ -256,6 +256,22 @@ combineWith fwF bwF = go where
 --   -> Task sFw sBw ()
 -- combineWithIso i = withIso i (\v c -> combineWith (\a b -> c (a,b)) v)
 
+-- | Apply an action to happen at the beginning of each cycle, before any other actions that
+--   currently happen.
+onEveryCycle
+  :: Functor m
+  => m ()
+  -> Task fw bw m a
+  -> Task fw bw m a
+onEveryCycle act t0 = M (go t0 <$ act) where
+  go = \case
+    Take s -> Take $ \bw -> goTaken (s bw)
+    M m -> M $ fmap go m
+    a -> a
+  goTaken = \case
+    Give fw t -> Give fw (M $ go t <$ act)
+    TM m -> TM $ fmap goTaken m
+
 run :: Signal dom bw -> Task fw bw Identity a -> [fw]
 run j = runIdentity . runM j
 
@@ -340,6 +356,7 @@ execInterleave bws0 p0 = goTake bws0 p0 where
     Give fw p' -> pure (fw, p')
     TM m      -> m >>= unsafeInterleaveM . goGive
 
+-- | Run in a such a way that the underlying monad can be IO.
 runInterleave :: (Interleave m, Monad m) => (Signal dom fw -> Signal dom bw) -> Task fw bw m a -> m a
 runInterleave f t = do
   bwsRef <- pure $! unsafePerformIO $ newIORef (error "bws not set")

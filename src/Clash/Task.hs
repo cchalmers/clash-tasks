@@ -34,6 +34,7 @@ module Clash.Task (
   next,
   nextWithBw,
   nextWithBwM,
+  onEveryCycle,
   await,
   awaitM,
   wait,
