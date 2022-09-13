@@ -27,27 +27,18 @@ module Clash.Task.Internal where
 
 
 import           Control.Applicative
-import           Control.DeepSeq
-import           Control.Exception
 import           Control.Monad.Catch       (MonadCatch (..), MonadThrow (..))
 import           Control.Monad.Except      (MonadError (..))
 import qualified Control.Monad.Fail        as F (MonadFail (fail))
-import           Control.Monad.IO.Class    (MonadIO (liftIO))
 import           Control.Monad.Identity
 import           Control.Monad.Morph       (hoist)
 import           Control.Monad.Reader      (MonadReader (..), ReaderT,
                                             mapReaderT)
 import           Control.Monad.State
-import           Control.Monad.State       (MonadState (..))
-import           Control.Monad.Trans.Class (MonadTrans (lift))
 import           Control.Monad.Writer      (MonadWriter (..), WriterT, censor,
                                             mapWriterT)
-import qualified Data.Foldable             as F
 import           Data.Functor
 import           Data.IORef
-import           Data.List                 hiding (foldr)
-import qualified Data.List                 as L
-import           Data.Maybe
 import           Hedgehog                  (GenT)
 import           System.IO.Unsafe
 
@@ -137,7 +128,7 @@ instance MonadReader r m => MonadReader r (Task bw fw m) where
       Take s -> Take (\bw -> goTaken (s bw))
       M m    -> M (go <$> local f m)
     goTaken p = case p of
-      Give fw p -> Give fw (go p)
+      Give fw p' -> Give fw (go p')
       TM m      -> TM (goTaken <$> local f m)
   reader = lift . reader
 
@@ -157,7 +148,7 @@ instance MonadWriter w m => MonadWriter w (Task bw fw m) where
         return (go p' $! mappend w w') )
       Pure r -> Pure (r, w)
     goTaken p w = case p of
-      Give fw p -> Give fw (go p w)
+      Give fw p' -> Give fw (go p' w)
       TM m -> TM (do
         (p', w') <- listen m
         return (goTaken p' $! mappend w w') )
@@ -274,10 +265,10 @@ runM bws0 p0 = goTake bws0 p0 where
     Pure _ -> pure []
     Take s -> case bss of
       ~(bw :- bws) -> goGive (s bw) >>= \case
-        ~(fw, p) -> (fw :) <$> goTake bws p
+        ~(fw, p') -> (fw :) <$> goTake bws p'
     M m -> m >>= goTake bss
   goGive p = case p of
-    Give fw p -> pure (fw, p)
+    Give fw p' -> pure (fw, p')
     TM m      -> m >>= goGive
 
 runUncons :: Monad m => (bws -> (bw, bws)) -> bws -> Task fw bw m a -> m [fw]
@@ -301,7 +292,7 @@ runLockstep uncons = goTake where
                   bw = bwF fw
                   ~(fw, t) = goGive (s bw)
               in  (bw, fw) : goTake bws' t
-    -- M (Identity t) -> goTake bws t
+    M (Identity t) -> goTake bws t
   goGive = \case
     Give fw t       -> (fw, t)
     TM (Identity t) -> goGive t
@@ -327,6 +318,7 @@ instance (Interleave m) => Interleave (ReaderT r m) where
 instance (Interleave m) => Interleave (GenT m) where
   unsafeInterleaveM = hoist unsafeInterleaveM
 
+l2j :: [a] -> Signal dom a
 l2j ~(a:as) = a :- l2j as
 
 runM' :: MonadIO m => (Signal dom fw -> Signal dom bw) -> Task fw bw m a -> m ()
@@ -342,10 +334,10 @@ execInterleave bws0 p0 = goTake bws0 p0 where
     Pure a -> pure ([], a)
     Take s -> case bss of
       ~(bw :- bws) -> goGive (s bw) >>= \case
-        ~(fw, p) -> (\ ~(fws, a) -> (fw : fws, a)) <$> unsafeInterleaveM (goTake bws p)
+        ~(fw, p') -> (\ ~(fws, a) -> (fw : fws, a)) <$> unsafeInterleaveM (goTake bws p')
     M m -> m >>= goTake bss
   goGive p = case p of
-    Give fw p -> pure (fw, p)
+    Give fw p' -> pure (fw, p')
     TM m      -> m >>= unsafeInterleaveM . goGive
 
 runInterleave :: (Interleave m, Monad m) => (Signal dom fw -> Signal dom bw) -> Task fw bw m a -> m a
