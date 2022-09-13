@@ -309,6 +309,9 @@ runLockstep uncons = goTake where
 class Monad m => Interleave m where
   unsafeInterleaveM :: m a -> m a
 
+instance Interleave Identity where
+  unsafeInterleaveM = id
+
 instance Interleave IO where
   unsafeInterleaveM = unsafeInterleaveIO
 
