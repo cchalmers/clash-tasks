@@ -270,10 +270,11 @@ run j = runIdentity . runM j
 
 runM :: Monad m => Signal dom bw -> Task fw bw m a -> m [fw]
 runM bws0 p0 = goTake bws0 p0 where
-  goTake bss@ ~(bw :- bws) p = case p of
+  goTake bss p = case p of
     Pure _ -> pure []
-    Take s -> goGive (s bw) >>= \case
-                ~(fw, p) -> (fw :) <$> goTake bws p
+    Take s -> case bss of
+      ~(bw :- bws) -> goGive (s bw) >>= \case
+        ~(fw, p) -> (fw :) <$> goTake bws p
     M m -> m >>= goTake bss
   goGive p = case p of
     Give fw p -> pure (fw, p)
@@ -334,10 +335,11 @@ runM' f t = do
 
 execInterleave :: (Interleave m, MonadIO m) => Signal dom bw -> Task fw bw m a -> m ([fw], a)
 execInterleave bws0 p0 = goTake bws0 p0 where
-  goTake bss@ ~(bw :- bws) p = case p of
+  goTake bss p = case p of
     Pure a -> pure ([], a)
-    Take s -> goGive (s bw) >>= \case
-                ~(fw, p) -> (\ ~(fws, a) -> (fw : fws, a)) <$> unsafeInterleaveM (goTake bws p)
+    Take s -> case bss of
+      ~(bw :- bws) -> goGive (s bw) >>= \case
+        ~(fw, p) -> (\ ~(fws, a) -> (fw : fws, a)) <$> unsafeInterleaveM (goTake bws p)
     M m -> m >>= goTake bss
   goGive p = case p of
     Give fw p -> pure (fw, p)
