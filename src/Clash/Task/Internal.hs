@@ -40,6 +40,7 @@ import           Hedgehog                  (GenT)
 import           System.IO.Unsafe
 
 import Clash.Signal.Internal
+import Control.Lens
 
 -- | A task is a way of declaring how to interact with a signal. Tasks are
 -- suitable to use with clash 'Signal's because they are lazy enough to handle
@@ -133,6 +134,43 @@ instance MonadState s m => MonadState s (Task bw fw m) where
   get = lift get
   put = lift . put
   state = lift . state
+
+-- | Similar to the FocusingFree for Freet, but it handles both Taken and Task.
+--
+-- There's no applicative/monoid instance because it doesn't make sense to combine.
+--
+-- If we didn't have separate Taken and Task constructors we could have used a newtype.
+data FocusingTaskOrTaken fw bw m k s a
+  = FocusingTask { unfocusingTask :: k (Task fw bw m s) a }
+  | FocusingTaken { unfocusingTaken :: k (Taken fw bw m s) a }
+
+instance (Functor (k (Task fw bw m s)), (Functor (k (Taken fw bw m s)))) => Functor (FocusingTaskOrTaken fw bw m k s) where
+  fmap f (FocusingTask as) = FocusingTask (fmap f as)
+  fmap f (FocusingTaken as) = FocusingTaken (fmap f as)
+
+type instance Zoomed (Task fw bw m) = FocusingTaskOrTaken fw bw m (Zoomed m)
+
+zoomTask
+  :: forall fw bw m n s t c
+   . Zoom m n s t
+  => LensLike' (Zoomed (Task fw bw m) c) t s
+  -- => LensLike' (FocusingTask fw bw m (Zoomed m) c) t s
+  -- => ((s -> Zoomed (Task fw bw m) c s)  -> t -> Zoomed (Task fw bw m) c t)
+  -- => ((s -> FocusingTask fw bw m (Zoomed m) c s) -> t -> FocusingTask fw bw m (Zoomed m) c t)
+  -- => ((s -> FocusingTaskOrTaken fw bw m (Zoomed m) c s) -> t -> FocusingTaskOrTaken fw bw m (Zoomed m) c t)
+  -> Task fw bw m c -> Task fw bw n c
+zoomTask l = go where
+  go = \case
+    Pure r -> Pure r
+    Take s -> Take (goTaken . s)
+    M m -> M $ go <$> zoom (\afb -> unfocusingTask . l (FocusingTask . afb)) m
+
+  goTaken = \case
+    Give fw p -> Give fw (go p)
+    TM m -> TM $ goTaken <$> zoom (\afb -> unfocusingTaken . l (FocusingTaken . afb)) m
+
+instance Zoom m n s t => Zoom (Task fw bw m) (Task fw bw n) s t where
+  zoom = zoomTask
 
 instance MonadWriter w m => MonadWriter w (Task bw fw m) where
   writer = lift . writer
