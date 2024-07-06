@@ -24,23 +24,22 @@
 
 module Clash.Task.Internal where
 
-import           Control.Monad.Catch       (MonadCatch (..), MonadThrow (..))
-import           Control.Monad.Except      (MonadError (..))
-import qualified Control.Monad.Fail        as F (MonadFail (fail))
+import           Control.Monad.Catch    (MonadCatch (..), MonadThrow (..))
+import           Control.Monad.Except   (MonadError (..))
+import qualified Control.Monad.Fail     as F (MonadFail (fail))
 import           Control.Monad.Identity
-import           Control.Monad.Morph       (hoist)
-import           Control.Monad.Reader      (MonadReader (..), ReaderT,
-                                            mapReaderT)
+import           Control.Monad.Morph    (hoist)
+import           Control.Monad.Reader   (MonadReader (..), ReaderT, mapReaderT)
 import           Control.Monad.State
-import           Control.Monad.Writer      (MonadWriter (..), WriterT, censor,
-                                            mapWriterT)
+import           Control.Monad.Writer   (MonadWriter (..), WriterT, censor,
+                                         mapWriterT)
 import           Data.Functor
 import           Data.IORef
-import           Hedgehog                  (GenT)
+import           Hedgehog               (GenT)
 import           System.IO.Unsafe
 
-import Clash.Signal.Internal
-import Control.Lens
+import           Clash.Signal.Internal
+import           Control.Lens
 
 -- | A task is a way of declaring how to interact with a signal. Tasks are
 -- suitable to use with clash 'Signal's because they are lazy enough to handle
@@ -127,7 +126,7 @@ instance MonadReader r m => MonadReader r (Task bw fw m) where
       M m    -> M (go <$> local f m)
     goTaken p = case p of
       Give fw p' -> Give fw (go p')
-      TM m      -> TM (goTaken <$> local f m)
+      TM m       -> TM (goTaken <$> local f m)
   reader = lift . reader
 
 instance MonadState s m => MonadState s (Task bw fw m) where
@@ -145,7 +144,7 @@ data FocusingTaskOrTaken fw bw m k s a
   | FocusingTaken { unfocusingTaken :: k (Taken fw bw m s) a }
 
 instance (Functor (k (Task fw bw m s)), (Functor (k (Taken fw bw m s)))) => Functor (FocusingTaskOrTaken fw bw m k s) where
-  fmap f (FocusingTask as) = FocusingTask (fmap f as)
+  fmap f (FocusingTask as)  = FocusingTask (fmap f as)
   fmap f (FocusingTaken as) = FocusingTaken (fmap f as)
 
 type instance Zoomed (Task fw bw m) = FocusingTaskOrTaken fw bw m (Zoomed m)
@@ -280,9 +279,9 @@ combineWith fwF bwF = go where
     _ -> Pure ()
   goTaken p1 p2 = case (p1, p2) of
     (Give fw1 t1, Give fw2 t2) -> Give (fwF fw1 fw2) (go t1 t2)
-    (TM m1, TM m2) -> TM $ liftA2 goTaken m1 m2
-    (TM m1, p2') -> TM $ m1 <&> \p1' -> goTaken p1' p2'
-    (p1', TM m2) -> TM $ m2 <&> \p2' -> goTaken p1' p2'
+    (TM m1, TM m2)             -> TM $ liftA2 goTaken m1 m2
+    (TM m1, p2')               -> TM $ m1 <&> \p1' -> goTaken p1' p2'
+    (p1', TM m2)               -> TM $ m2 <&> \p2' -> goTaken p1' p2'
 
 -- combineWithIso
 --   :: AnIso sBw sFw (aBw, bBw) (aFw, bFw)
@@ -320,7 +319,7 @@ runM = goTake where
     M m -> m >>= goTake bss
   goGive p = case p of
     Give fw p' -> pure (fw, p')
-    TM m      -> m >>= goGive
+    TM m       -> m >>= goGive
 
 runUncons :: Monad m => (bws -> (bw, bws)) -> bws -> Task fw bw m a -> m [fw]
 runUncons unCons = goTake where
@@ -389,7 +388,7 @@ execInterleave = goTake where
     M m -> m >>= goTake bss
   goGive p = case p of
     Give fw p' -> pure (fw, p')
-    TM m      -> m >>= unsafeInterleaveM . goGive
+    TM m       -> m >>= unsafeInterleaveM . goGive
 
 -- | Run in a such a way that the underlying monad can be IO.
 runInterleave :: (Interleave m, Monad m) => (Signal dom fw -> Signal dom bw) -> Task fw bw m a -> m a
