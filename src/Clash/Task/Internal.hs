@@ -17,16 +17,13 @@
 {-# LANGUAGE GADTs                 #-}
 {-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedLabels      #-}
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
-{-# LANGUAGE TypeOperators         #-}
+{-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE UndecidableInstances  #-}
 
 module Clash.Task.Internal where
 
-
-import           Control.Applicative
 import           Control.Monad.Catch       (MonadCatch (..), MonadThrow (..))
 import           Control.Monad.Except      (MonadError (..))
 import qualified Control.Monad.Fail        as F (MonadFail (fail))
@@ -94,7 +91,7 @@ instance Functor m => Applicative (Task b f m) where
   pure = Pure
   pf <*> pa = go pf where
     go p = case p of
-      Take s -> Take (\bw -> goTaken (s bw))
+      Take s -> Take (goTaken . s)
       M m    -> M (fmap go m)
       Pure f -> fmap f pa
     goTaken = \case
@@ -105,7 +102,7 @@ instance Functor m => Monad (Task b f m) where
   p0 >>= f = go p0 where
     go = \case
       Pure r -> f r
-      Take s -> Take (\bw -> goTaken (s bw))
+      Take s -> Take (goTaken . s)
       M m    -> M $ go <$> m
     goTaken = \case
       TM m      -> TM (fmap goTaken m)
@@ -125,7 +122,7 @@ instance MonadReader r m => MonadReader r (Task bw fw m) where
   local f = go where
     go = \case
       Pure r -> Pure r
-      Take s -> Take (\bw -> goTaken (s bw))
+      Take s -> Take (goTaken . s)
       M m    -> M (go <$> local f m)
     goTaken p = case p of
       Give fw p' -> Give fw (go p')
@@ -176,7 +173,7 @@ instance MonadError e m => MonadError e (Task bw fw m) where
     goTaken bw = \case
       Give fw p -> Give fw (go p)
       -- a best effort case, might be better just to error outright
-      TM m -> TM $ (fmap (goTaken bw) m `catchError` (pure . tryRecover . f))
+      TM m -> TM $ fmap (goTaken bw) m `catchError` (pure . tryRecover . f)
       where tryRecover = \case
               Take s -> (s bw)
               Pure r -> (Give (error "thrown while taken") (Pure r))
@@ -195,27 +192,27 @@ instance MonadCatch m => MonadCatch (Task bw fw m) where
     goTaken bw = \case
       Give fw p -> Give fw (go p)
       -- a best effort case, might be better just to error outright
-      TM m -> TM $ (fmap (goTaken bw) m `Control.Monad.Catch.catch` (pure . tryRecover . f))
+      TM m -> TM (fmap (goTaken bw) m `Control.Monad.Catch.catch` (pure . tryRecover . f))
       where tryRecover = \case
               Take s -> (s bw)
               Pure r -> (Give (error "thrown while taken") (Pure r))
               M m    -> (TM $ tryRecover <$> m)
 
 fwMap :: Functor m => (fw -> fw') -> Task fw bw m a -> Task fw' bw m a
-fwMap f p0 = go p0 where
+fwMap f = go where
   go = \case
     Pure a -> Pure a
-    Take s -> Take (\bw -> goTaken (s bw))
+    Take s -> Take (goTaken . s)
     M m    -> M $ fmap go m
   goTaken = \case
     TM m      -> TM $ fmap goTaken m
     Give fw p -> Give (f fw) (go p)
 
 bwMap :: Functor m => (bw' -> bw) -> Task fw bw m a -> Task fw bw' m a
-bwMap f p0 = go p0 where
+bwMap f = go where
   go = \case
     Pure a -> Pure a
-    Take s -> Take (\bw -> goTaken (s (f bw)))
+    Take s -> Take (goTaken . s . f)
     M m    -> M $ fmap go m
   goTaken = \case
     Give fw p -> Give fw (go p)
@@ -239,13 +236,13 @@ combineWith
 combineWith fwF bwF = go where
   go p1 p2 = case (p1, p2) of
     (Take s1, Take s2) -> Take $ \ bw -> let (bw1, bw2) = bwF bw in goTaken (s1 bw1) (s2 bw2)
-    (M m1, M m2) -> M $ liftA2 (\p1' p2' -> go p1' p2') m1 m2
+    (M m1, M m2) -> M $ liftA2 go m1 m2
     (M m1, p2') -> M $ m1 <&> \p1' -> go p1' p2'
     (p1', M m2) -> M $ m2 <&> \p2' -> go p1' p2'
     _ -> Pure ()
   goTaken p1 p2 = case (p1, p2) of
     (Give fw1 t1, Give fw2 t2) -> Give (fwF fw1 fw2) (go t1 t2)
-    (TM m1, TM m2) -> TM $ liftA2 (\p1' p2' -> goTaken p1' p2') m1 m2
+    (TM m1, TM m2) -> TM $ liftA2 goTaken m1 m2
     (TM m1, p2') -> TM $ m1 <&> \p1' -> goTaken p1' p2'
     (p1', TM m2) -> TM $ m2 <&> \p2' -> goTaken p1' p2'
 
@@ -276,7 +273,7 @@ run :: Signal dom bw -> Task fw bw Identity a -> [fw]
 run j = runIdentity . runM j
 
 runM :: Monad m => Signal dom bw -> Task fw bw m a -> m [fw]
-runM bws0 p0 = goTake bws0 p0 where
+runM = goTake where
   goTake bss p = case p of
     Pure _ -> pure []
     Take s -> case bss of
@@ -288,10 +285,10 @@ runM bws0 p0 = goTake bws0 p0 where
     TM m      -> m >>= goGive
 
 runUncons :: Monad m => (bws -> (bw, bws)) -> bws -> Task fw bw m a -> m [fw]
-runUncons uncons = goTake where
+runUncons unCons = goTake where
   goTake bws = \case
     Pure _ -> pure []
-    Take s -> let (bw, bws') = uncons bws
+    Take s -> let (bw, bws') = unCons bws
               in  goGive (s bw) >>= \case
                     ~(fw, t) -> (fw :) <$> goTake bws' t
     M m -> m >>= goTake bws
@@ -300,11 +297,11 @@ runUncons uncons = goTake where
     TM m      -> m >>= goGive
 
 runLockstep :: forall bws bw fw a. (bws -> (fw -> bw, bws)) -> bws -> Task fw bw Identity a -> [(bw, fw)]
-runLockstep uncons = goTake where
+runLockstep unCons = goTake where
   goTake :: bws -> Task fw bw Identity a -> [(bw, fw)]
   goTake bws = \case
     Pure _ -> []
-    Take s -> let (bwF, bws') = uncons bws
+    Take s -> let (bwF, bws') = unCons bws
                   bw = bwF fw
                   ~(fw, t) = goGive (s bw)
               in  (bw, fw) : goTake bws' t
@@ -335,7 +332,7 @@ instance (Interleave m) => Interleave (GenT m) where
   unsafeInterleaveM = hoist unsafeInterleaveM
 
 l2j :: [a] -> Signal dom a
-l2j ~(a:as) = a :- l2j as
+l2j = foldr (:-) (error "l2j: empty list")
 
 runM' :: MonadIO m => (Signal dom fw -> Signal dom bw) -> Task fw bw m a -> m ()
 runM' f t = do
@@ -345,7 +342,7 @@ runM' f t = do
   liftIO $ writeIORef fwsRef fws
 
 execInterleave :: (Interleave m, Monad m) => Signal dom bw -> Task fw bw m a -> m ([fw], a)
-execInterleave bws0 p0 = goTake bws0 p0 where
+execInterleave = goTake where
   goTake bss p = case p of
     Pure a -> pure ([], a)
     Take s -> case bss of
