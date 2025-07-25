@@ -28,7 +28,7 @@ import           Control.Monad.Catch    (MonadCatch (..), MonadThrow (..))
 import           Control.Monad.Except   (MonadError (..))
 import qualified Control.Monad.Fail     as F (MonadFail (fail))
 import           Control.Monad.Identity
-import           Control.Monad.Morph    (hoist)
+import           Control.Monad.Morph    (MFunctor (hoist))
 import           Control.Monad.Reader   (MonadReader (..), ReaderT, mapReaderT)
 import           Control.Monad.State
 import           Control.Monad.Writer   (MonadWriter (..), WriterT, censor,
@@ -134,6 +134,17 @@ instance MonadState s m => MonadState s (Task bw fw m) where
   put = lift . put
   state = lift . state
 
+instance MFunctor (Task fw bw) where
+  hoist f = go where
+    go = \case
+      Pure a -> Pure a
+      M m    -> M (f (go <$> m))
+      Take s -> Take (\bw -> goTaken (s bw))
+
+    goTaken = \case
+      TM m      -> TM (f (goTaken <$> m))
+      Give fw t -> Give fw (go t)
+
 -- | Similar to the FocusingFree for Freet, but it handles both Taken and Task.
 --
 -- There's no applicative/monoid instance because it doesn't make sense to combine.
@@ -210,7 +221,7 @@ instance MonadError e m => MonadError e (Task bw fw m) where
     goTaken bw = \case
       Give fw p -> Give fw (go p)
       -- a best effort case, might be better just to error outright
-      TM m -> TM $ fmap (goTaken bw) m `catchError` (pure . tryRecover . f)
+      TM m      -> TM $ fmap (goTaken bw) m `catchError` (pure . tryRecover . f)
       where tryRecover = \case
               Take s -> (s bw)
               Pure r -> (Give (error "thrown while taken") (Pure r))
@@ -300,11 +311,11 @@ onEveryCycle
 onEveryCycle act t0 = M (go t0 <$ act) where
   go = \case
     Take s -> Take $ \bw -> goTaken (s bw)
-    M m -> M $ fmap go m
-    a -> a
+    M m    -> M $ fmap go m
+    a      -> a
   goTaken = \case
     Give fw t -> Give fw (M $ go t <$ act)
-    TM m -> TM $ fmap goTaken m
+    TM m      -> TM $ fmap goTaken m
 
 run :: Signal dom bw -> Task fw bw Identity a -> [fw]
 run j = runIdentity . runM j
