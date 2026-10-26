@@ -98,6 +98,13 @@ instance Functor m => Applicative (Task b f m) where
       TM m      -> TM (fmap goTaken m)
       Give fw p -> Give fw (go p)
 
+  -- The class defaults for these go through 'fmap' and '<*>'. For '*>' that wraps the second task
+  -- in an 'fmap' which rebuilds every remaining step, so anything that sequences recursively with
+  -- '*>' ('Control.Monad.forever', 'replicateM_', 'for_', 'traverse_') nests one more 'fmap' per
+  -- iteration and running n cycles costs O(n^2). The default 'liftA2' walks the first task twice.
+  liftA2 f pa pb = pa >>= \a -> fmap (f a) pb
+  pa *> pb = pa >>= \_ -> pb
+
 instance Functor m => Monad (Task b f m) where
   p0 >>= f = go p0 where
     go = \case
