@@ -386,8 +386,13 @@ instance (Interleave m) => Interleave (ReaderT r m) where
 instance (Interleave m) => Interleave (GenT m) where
   unsafeInterleaveM = hoist unsafeInterleaveM
 
+-- | Lazy in the list: a cell of the signal exists before the task has produced the
+-- matching element, so a task may read the circuit's response to a cycle before it
+-- gives that cycle's input, provided the response doesn't depend on it. A 'foldr'
+-- would force each cons first and turn that into a loop.
 l2j :: [a] -> Signal dom a
-l2j = foldr (:-) (error "l2j: empty list")
+l2j ~(a : as) = a :- l2j as
+{- HLINT ignore l2j "Use foldr" -}
 
 runM' :: MonadIO m => (Signal dom fw -> Signal dom bw) -> Task fw bw m a -> m ()
 runM' f t = do
